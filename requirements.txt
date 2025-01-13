@@ -1,5 +1,14 @@
+Copy--find-links https://wheel-index.linuxserver.io/ubuntu/
+--prefer-binary
+
 streamlit==1.24.0
 requests==2.31.0
 beautifulsoup4==4.12.2
-pandas==2.0.3
-python-dotenv==1.0.0
+soupsieve==2.4.1
+urllib3==2.0.3
+charset-normalizer==3.1.0
+certifi==2023.5.7
+idna==3.4
+
+wheel==0.40.0
+setuptools==67.8.0
