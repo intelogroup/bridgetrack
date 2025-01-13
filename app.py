@@ -1,61 +1,45 @@
-# app.py
+# streamlit_app.py
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 import logging
-from datetime import datetime
-import time
 
-# Configure logging
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger("LBridgeLogin")
+# Basic page config
+st.set_page_config(page_title="LBridge Login", page_icon="🔒", layout="wide")
+
+# Initialize session state
+if 'debug_logs' not in st.session_state:
+    st.session_state.debug_logs = []
+
+def log_debug(message):
+    """Add debug message to session state"""
+    st.session_state.debug_logs.append(message)
+    if len(st.session_state.debug_logs) > 100:  # Keep only last 100 messages
+        st.session_state.debug_logs = st.session_state.debug_logs[-100:]
 
 class LBridgeSession:
     def __init__(self):
-        """Initialize session with optimized headers"""
         self.session = requests.Session()
         self.base_url = "https://lbridge.com"
-        
-        # Optimized headers
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Connection': 'keep-alive',
-            'DNT': '1'
+            'Accept-Language': 'en-US,en;q=0.9'
         })
-        self.login_status = False
-        self.last_error = None
 
-    def debug_response(self, response, context=""):
-        """Log response details for debugging"""
-        logger.debug(f"\n=== {context} ===")
-        logger.debug(f"Status Code: {response.status_code}")
-        logger.debug(f"URL: {response.url}")
-        logger.debug("Headers:")
-        for key, value in response.headers.items():
-            logger.debug(f"  {key}: {value}")
-        logger.debug("Cookies:")
-        for cookie in response.cookies:
-            logger.debug(f"  {cookie.name}: {cookie.value}")
-
-    def get_form_fields(self, username, password):
-        """Get login page and extract form fields"""
+    def login(self, username, password):
         try:
-            url = f"{self.base_url}/Login.aspx"
-            response = self.session.get(url, timeout=10)
-            self.debug_response(response, "Initial Page Load")
+            # Get login page
+            log_debug("Fetching login page...")
+            response = self.session.get(f"{self.base_url}/Login.aspx")
+            log_debug(f"Login page status: {response.status_code}")
             
             if response.status_code != 200:
-                raise Exception(f"Failed to load login page: {response.status_code}")
+                return False, "Could not load login page"
 
+            # Parse form
             soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # Extract all form fields
-            form_fields = {
+            form_data = {
                 '__VIEWSTATE': '',
                 '__VIEWSTATEGENERATOR': '',
                 '__EVENTVALIDATION': '',
@@ -63,134 +47,70 @@ class LBridgeSession:
                 'ctl00$MainContent$txtPassword': password,
                 'ctl00$MainContent$cmdSubmit': 'Submit'
             }
-            
-            # Update form fields with actual values
-            for field in form_fields.keys():
+
+            # Get form fields
+            for field in form_data.keys():
                 input_elem = soup.find('input', {'name': field})
                 if input_elem and 'value' in input_elem.attrs:
-                    form_fields[field] = input_elem['value']
-                    logger.debug(f"Found field {field}: {form_fields[field][:20]}...")
-            
-            return form_fields
-            
-        except Exception as e:
-            logger.error(f"Error getting form fields: {str(e)}")
-            raise
+                    form_data[field] = input_elem['value']
+                    log_debug(f"Found field: {field}")
 
-    def login(self, username, password):
-        """Attempt login with proper error handling"""
-        try:
-            # Reset session state
-            self.login_status = False
-            self.last_error = None
-            
-            # Get form fields
-            logger.info("Getting login form fields...")
-            form_data = self.get_form_fields(username, password)
-            
-            # Attempt login
-            logger.info("Submitting login form...")
+            # Submit login
+            log_debug("Submitting login form...")
             response = self.session.post(
                 f"{self.base_url}/Login.aspx",
                 data=form_data,
-                timeout=10,
                 allow_redirects=True
             )
             
-            self.debug_response(response, "Login Response")
-            
-            # Check for successful login
-            if response.status_code == 200:
-                if 'Logout.aspx' in response.text or 'Welcome' in response.text:
-                    logger.info("Login successful!")
-                    self.login_status = True
-                    return True
-                else:
-                    # Check for error message
-                    soup = BeautifulSoup(response.text, 'html.parser')
-                    error_elem = soup.find('span', {'id': 'MainContent_lblUserError'})
-                    if error_elem:
-                        self.last_error = error_elem.text.strip()
-                    else:
-                        self.last_error = "Login failed - Invalid credentials"
-                    logger.error(f"Login failed: {self.last_error}")
-                    return False
+            log_debug(f"Login response status: {response.status_code}")
+
+            # Check result
+            if 'Logout.aspx' in response.text or 'Welcome' in response.text:
+                log_debug("Login successful!")
+                return True, "Success"
             else:
-                self.last_error = f"Server returned status code: {response.status_code}"
-                logger.error(self.last_error)
-                return False
-                
-        except requests.RequestException as e:
-            self.last_error = f"Network error: {str(e)}"
-            logger.error(self.last_error)
-            return False
+                # Check for error message
+                error_elem = BeautifulSoup(response.text, 'html.parser').find(
+                    'span', {'id': 'MainContent_lblUserError'}
+                )
+                error_msg = error_elem.text.strip() if error_elem else "Login failed"
+                log_debug(f"Login failed: {error_msg}")
+                return False, error_msg
+
         except Exception as e:
-            self.last_error = f"Unexpected error: {str(e)}"
-            logger.error(self.last_error)
-            return False
+            log_debug(f"Error during login: {str(e)}")
+            return False, str(e)
 
-def create_streamlit_ui():
-    """Create Streamlit UI with proper state management"""
-    st.set_page_config(
-        page_title="LBridge Login",
-        page_icon="🔒",
-        layout="wide"
-    )
+def main():
+    st.title("LBridge Login Test")
 
-    # Initialize session state
-    if 'lbridge_session' not in st.session_state:
-        st.session_state.lbridge_session = LBridgeSession()
-    if 'login_status' not in st.session_state:
-        st.session_state.login_status = False
-    if 'debug_log' not in st.session_state:
-        st.session_state.debug_log = []
-
-    # Main UI
-    st.title("LBridge Login System")
-    
-    # Debug sidebar
+    # Sidebar with debug info
     with st.sidebar:
-        st.title("Debug Options")
-        show_debug = st.checkbox("Show Debug Information")
-        if show_debug:
-            st.text_area("Latest Debug Log", 
-                        value="\n".join(st.session_state.debug_log),
+        st.title("Debug Panel")
+        if st.button("Clear Debug Logs"):
+            st.session_state.debug_logs = []
+        
+        if st.session_state.debug_logs:
+            st.text_area("Debug Logs", 
+                        value="\n".join(st.session_state.debug_logs),
                         height=400)
-    
-    # Login form
-    if not st.session_state.login_status:
-        with st.form("login_form"):
-            username = st.text_input("Username")
-            password = st.text_input("Password", type="password")
-            submitted = st.form_submit_button("Login")
-            
-            if submitted and username and password:
-                with st.spinner("Attempting login..."):
-                    # Clear previous debug logs
-                    st.session_state.debug_log = []
-                    
-                    # Attempt login
-                    success = st.session_state.lbridge_session.login(username, password)
-                    
-                    if success:
-                        st.session_state.login_status = True
-                        st.success("Login successful!")
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.error(f"Login failed: {st.session_state.lbridge_session.last_error}")
-                        
-                    # Update debug log
-                    if show_debug:
-                        for handler in logger.handlers:
-                            if hasattr(handler, 'stream'):
-                                st.session_state.debug_log = handler.stream.getvalue().split('\n')
-    else:
-        st.success("Currently logged in!")
-        if st.button("Logout"):
-            st.session_state.login_status = False
-            st.session_state.lbridge_session = LBridgeSession()
-            st.rerun()
+
+    # Main login form
+    with st.form("login_form"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Login")
+
+        if submitted and username and password:
+            with st.spinner("Attempting login..."):
+                session = LBridgeSession()
+                success, message = session.login(username, password)
+                
+                if success:
+                    st.success("Login successful! ✅")
+                else:
+                    st.error(f"Login failed: {message} ❌")
 
 if __name__ == "__main__":
-    create_streamlit_ui()
+    main()
