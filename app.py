@@ -2,115 +2,126 @@
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
-import logging
 
-# Basic page config
-st.set_page_config(page_title="LBridge Login", page_icon="🔒", layout="wide")
+# Page config
+st.set_page_config(page_title="LBridge Login", layout="wide")
 
-# Initialize session state
-if 'debug_logs' not in st.session_state:
-    st.session_state.debug_logs = []
+# Debug messages
+if 'debug_messages' not in st.session_state:
+    st.session_state.debug_messages = []
 
-def log_debug(message):
-    """Add debug message to session state"""
-    st.session_state.debug_logs.append(message)
-    if len(st.session_state.debug_logs) > 100:  # Keep only last 100 messages
-        st.session_state.debug_logs = st.session_state.debug_logs[-100:]
+def add_debug(message):
+    st.session_state.debug_messages.append(message)
+    st.write(message)
 
-class LBridgeSession:
-    def __init__(self):
-        self.session = requests.Session()
-        self.base_url = "https://lbridge.com"
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9'
-        })
+# Main login interface
+st.title("LBridge Login Test")
 
-    def login(self, username, password):
-        try:
-            # Get login page
-            log_debug("Fetching login page...")
-            response = self.session.get(f"{self.base_url}/Login.aspx")
-            log_debug(f"Login page status: {response.status_code}")
-            
-            if response.status_code != 200:
-                return False, "Could not load login page"
+# Check if credentials exist in secrets
+try:
+    username = st.secrets["lbridge_credentials"]["username"]
+    password = st.secrets["lbridge_credentials"]["password"]
+    add_debug("Successfully loaded credentials from secrets")
+except Exception as e:
+    add_debug(f"Error loading secrets: {str(e)}")
+    username = ""
+    password = ""
 
-            # Parse form
-            soup = BeautifulSoup(response.text, 'html.parser')
-            form_data = {
-                '__VIEWSTATE': '',
-                '__VIEWSTATEGENERATOR': '',
-                '__EVENTVALIDATION': '',
-                'ctl00$MainContent$txtUserName': username,
-                'ctl00$MainContent$txtPassword': password,
-                'ctl00$MainContent$cmdSubmit': 'Submit'
-            }
+# Login form
+with st.form(key='login_form'):
+    # Show credentials from secrets if available
+    input_username = st.text_input("Username", value=username)
+    input_password = st.text_input("Password", value=password, type="password")
+    
+    # Option to use secrets or input credentials
+    use_secrets = st.checkbox("Use stored credentials", value=bool(username))
+    
+    submit_button = st.form_submit_button(label='Login')
 
-            # Get form fields
-            for field in form_data.keys():
-                input_elem = soup.find('input', {'name': field})
-                if input_elem and 'value' in input_elem.attrs:
-                    form_data[field] = input_elem['value']
-                    log_debug(f"Found field: {field}")
-
-            # Submit login
-            log_debug("Submitting login form...")
-            response = self.session.post(
-                f"{self.base_url}/Login.aspx",
-                data=form_data,
-                allow_redirects=True
-            )
-            
-            log_debug(f"Login response status: {response.status_code}")
-
-            # Check result
-            if 'Logout.aspx' in response.text or 'Welcome' in response.text:
-                log_debug("Login successful!")
-                return True, "Success"
-            else:
-                # Check for error message
-                error_elem = BeautifulSoup(response.text, 'html.parser').find(
-                    'span', {'id': 'MainContent_lblUserError'}
-                )
-                error_msg = error_elem.text.strip() if error_elem else "Login failed"
-                log_debug(f"Login failed: {error_msg}")
-                return False, error_msg
-
-        except Exception as e:
-            log_debug(f"Error during login: {str(e)}")
-            return False, str(e)
-
-def main():
-    st.title("LBridge Login Test")
-
-    # Sidebar with debug info
-    with st.sidebar:
-        st.title("Debug Panel")
-        if st.button("Clear Debug Logs"):
-            st.session_state.debug_logs = []
+    if submit_button:
+        # Use either secrets or input credentials
+        final_username = username if use_secrets else input_username
+        final_password = password if use_secrets else input_password
         
-        if st.session_state.debug_logs:
-            st.text_area("Debug Logs", 
-                        value="\n".join(st.session_state.debug_logs),
-                        height=400)
-
-    # Main login form
-    with st.form("login_form"):
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Login")
-
-        if submitted and username and password:
-            with st.spinner("Attempting login..."):
-                session = LBridgeSession()
-                success, message = session.login(username, password)
+        add_debug(f"Attempting login with username: {final_username}")
+        
+        try:
+            session = requests.Session()
+            
+            # First request - get login page
+            add_debug("Fetching login page...")
+            initial_response = session.get('https://lbridge.com/Login.aspx')
+            add_debug(f"Login page status code: {initial_response.status_code}")
+            
+            if initial_response.status_code == 200:
+                # Parse the login page
+                soup = BeautifulSoup(initial_response.text, 'html.parser')
                 
-                if success:
-                    st.success("Login successful! ✅")
+                # Get form fields
+                viewstate = soup.find('input', {'name': '__VIEWSTATE'})['value']
+                viewstategenerator = soup.find('input', {'name': '__VIEWSTATEGENERATOR'})['value']
+                eventvalidation = soup.find('input', {'name': '__EVENTVALIDATION'})['value']
+                
+                add_debug("Got form fields")
+                
+                # Prepare login data
+                login_data = {
+                    '__VIEWSTATE': viewstate,
+                    '__VIEWSTATEGENERATOR': viewstategenerator,
+                    '__EVENTVALIDATION': eventvalidation,
+                    'ctl00$MainContent$txtUserName': final_username,
+                    'ctl00$MainContent$txtPassword': final_password,
+                    'ctl00$MainContent$cmdSubmit': 'Submit'
+                }
+                
+                # Set headers
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Origin': 'https://lbridge.com',
+                    'Referer': 'https://lbridge.com/Login.aspx'
+                }
+                
+                add_debug("Attempting login...")
+                
+                # Submit login
+                login_response = session.post(
+                    'https://lbridge.com/Login.aspx',
+                    data=login_data,
+                    headers=headers,
+                    allow_redirects=True
+                )
+                
+                add_debug(f"Login response status: {login_response.status_code}")
+                
+                # Check response
+                if login_response.status_code == 200:
+                    if 'Logout.aspx' in login_response.text:
+                        st.success("Login successful!")
+                        add_debug("Login successful - found Logout.aspx")
+                    else:
+                        error_soup = BeautifulSoup(login_response.text, 'html.parser')
+                        error_elem = error_soup.find('span', {'id': 'MainContent_lblUserError'})
+                        if error_elem:
+                            st.error(f"Login failed: {error_elem.text.strip()}")
+                            add_debug(f"Login failed: {error_elem.text.strip()}")
+                        else:
+                            st.error("Login failed - please check your credentials")
+                            add_debug("Login failed - no specific error message found")
                 else:
-                    st.error(f"Login failed: {message} ❌")
+                    st.error(f"Login failed with status code: {login_response.status_code}")
+                    add_debug(f"Login failed - unexpected status code: {login_response.status_code}")
+            else:
+                st.error("Could not access login page")
+                add_debug(f"Failed to access login page: {initial_response.status_code}")
+                
+        except Exception as e:
+            st.error(f"Error occurred: {str(e)}")
+            add_debug(f"Exception: {str(e)}")
 
-if __name__ == "__main__":
-    main()
+# Debug section
+with st.expander("Debug Information"):
+    for msg in st.session_state.debug_messages:
+        st.text(msg)
